@@ -1,0 +1,314 @@
+class formRequest {
+  constructor({
+    startMessage = 'Complete the form',
+    endMessage = 'Form is competed',
+    formMask = [[{field: 'name'}, {change: 'change information'}, {exit: 'cancel form'}, {submit: 'finish'}]]
+  } = {}) {
+    this.startMessage = startMessage
+    this.endMessage = endMessage
+    this.form = []
+    this.currentWritingField = null
+
+    formMask.forEach((layer, i) => {
+      this.form[i] = []
+      
+      layer.forEach((field, j) => {
+        const [field_type, field_title] = Object.entries(field)[0]
+
+        if(field_type === 'change' || field_type === 'exit' || field_type === 'submit') {
+          this.form[i][j] = {
+            title: field_title,
+            type: field_type,
+            is_servise: true
+          }
+
+          if(field_type === 'submit') this.form[i][j].hidden = true
+        }
+        else {
+          this.form[i][j] = {
+            title: field_title,
+            type: field_type,
+            value: null
+          }
+        }
+      })
+    })
+  }
+
+  importData(data) {
+    this.form = data.form
+    this.startMessage = data.startMessage
+    this.endMessage = data.endMessage
+    this.currentWritingField = data.currentWritingField
+
+    return this
+  }
+
+  exportData() {
+    return JSON.stringify({
+      form: this.form,
+      startMessage: this.startMessage,
+      endMessage: this.endMessage,
+      currentWritingField: this.currentWritingField
+    }, 0, 2)
+  }
+
+  maskItemToTgButton(item) {
+    let result = 0
+    
+    if(item.type === 'field'|| item.type === 'email' || item.is_servise) result = {text: item.title}
+    // else if(item.type === 'phone') result = {text: item.title, request_contact: true}
+    else if(item.type === 'phone') result = {text: item.title}
+
+    return result
+  }
+
+  maskToKeyboard(mask, type = 'every') {
+    const keysLayout = []
+
+    this.objectWhile((field, j, layer, i) => {
+
+      if(type === 'all') keysLayout[i].push(this.maskItemToTgButton(field))
+      if(type === 'every' && field.hidden !== true) keysLayout[i].push(this.maskItemToTgButton(field))
+      else if((field.is_servise && field.hidden !== true) || (type === 'empty_fields' && field.value === null)) keysLayout[i].push(this.maskItemToTgButton(field))
+
+    }, (layer, i) => keysLayout[i] = [])
+    
+    return {
+      keyboard: keysLayout,
+      // one_time_keyboard: true,
+      resize_keyboard: true
+    }
+  }
+
+  objectWhile(cellCallback, rowCallback) {
+    this.form.forEach((layer, i, array) => {
+      if(typeof rowCallback === 'function') rowCallback(layer, i, array)
+      
+      layer.forEach((field, j, subArray) => {
+        cellCallback(field, j, layer, i, subArray, array)
+      })
+    })
+  }
+
+  objectFind(callback) {
+    let findedItem = null
+    this.objectWhile((field, j, layer, i, subarray, array) => {
+      if(callback(field, j, layer, i, subarray, array)) findedItem = field
+    })
+    return findedItem
+  }
+
+  isAllFilled() {
+    let result = true
+    this.objectWhile(field => {
+      if(field.is_servise !== true && field.value === null) result = false
+    })
+    return result
+  }
+
+  getFieldsValues() {
+    const valuesObj = {}
+    this.objectWhile(field => {
+      if(field.is_servise !== true) valuesObj[field.title] = field.value || ''
+    })
+    return valuesObj
+  }
+
+  startForm(chatId) {
+    sendMessage(chatId, this.startMessage, this.maskToKeyboard(this.form, 'empty_fields'))
+  }
+
+  messageHandler(data) {
+    const chatId = data.message.from.id,
+          messageText = data.message.text
+
+    if(messageText === this.objectFind(field => field.type === 'exit')?.title) {
+      setDataCell(userDataPageRowNumber, 2, 'FREE')
+      setDataCell(userDataPageRowNumber, 3, undefined)
+      sendMessage(chatId, 'Form canceled', {remove_keyboard: true})
+    }
+    else if(messageText === this.objectFind(field => field.type === 'change')?.title) {
+      setDataCell(userDataPageRowNumber, 2, 'FORM_FIELD_CHANGE_DATA')
+      sendMessage(chatId, 'Choose what do you want to change', this.maskToKeyboard(this.form, 'every'))
+    }
+    else if(messageText === this.objectFind(field => field.type === 'submit')?.title) {
+      const info = this.getFieldsValues(),
+            formsStorage = JSON.parse(getDataCell(userDataPageRowNumber, 4) || '{}')
+
+      formsStorage[+new Date()] = info
+
+      setDataCell(userDataPageRowNumber, 4, JSON.stringify(formsStorage))
+
+      setDataCell(userDataPageRowNumber, 2, 'FREE')
+      setDataCell(userDataPageRowNumber, 3, undefined)
+      sendMessage(chatId, this.endMessage, {remove_keyboard: true})
+    }
+
+    else {
+     if(getDataCell(userDataPageRowNumber, 2) === 'FORM_EXECUTE' || getDataCell(userDataPageRowNumber, 2) === 'FORM_FIELD_CHOICE' ||
+        getDataCell(userDataPageRowNumber, 2) === 'FORM_FIELD_CHANGE_DATA') {
+        if(this.objectFind(field => field.title === messageText)) {
+          this.currentWritingField = messageText
+          setDataCell(userDataPageRowNumber, 2, 'FORM_FIELD_EDITING')
+
+          sendMessage(chatId, 'Write the ' + this.currentWritingField + ": ")
+        }
+        else sendMessage(chatId, 'Something went wrong, try again')
+      }
+      else if(getDataCell(userDataPageRowNumber, 2) === 'FORM_FIELD_EDITING') {
+        let findedField = this.objectFind(field => field.title === this.currentWritingField)
+
+        if(findedField) {
+          findedField.value = messageText
+
+          if(this.isAllFilled()) this.objectFind(field => field.type === 'submit').hidden = false
+
+          sendMessage(chatId, findedField.title + ' is processed', this.maskToKeyboard(this.form, 'empty_fields'))
+          setDataCell(userDataPageRowNumber, 2, 'FORM_FIELD_CHOICE')
+        }
+        else sendMessage(chatId, 'Something went wrong, try again')
+      }
+
+      setDataCell(userDataPageRowNumber, 3, chat_form.exportData())
+    }
+  }
+}
+
+debugMessages = [
+  {
+    message: {
+      text: '/business_command',
+      from: {id: '656091610'}
+    }
+  },
+  {
+    message: {
+      text: 'Name',
+      from: {id: '656091610'}
+    }
+  }
+]
+debugMessagesCounter = 0
+
+function getSheetById(spreadsheet, sheetId) {
+  return spreadsheet.getSheets().filter(sheet => sheet.getSheetId() === sheetId)[0]
+}
+
+function sendMessage(chatId, message, keyboard) {
+  const data = {
+          method: 'POST',
+          payload: {
+            method: 'sendMessage',
+            chat_id: String(chatId),
+            text: String(message),
+            reply_markup: JSON.stringify(keyboard)
+          }
+        }
+  return UrlFetchApp.fetch(botUrl + '/', data)
+}
+
+function getDataCell(row, col) {
+  return dataPage.getRange(row, col).getValue()
+}
+
+function setDataCell(row, col, value) {
+  dataPage.getRange(row, col).setValue(value)
+}
+
+function getUserDataPageRowNumber(chatId) {
+  const result = dataPage.getRange(1, 1, tableRangeLimiter).getValues().findIndex(row => row[0] === chatId)
+  return result !== -1 ? result + 1 : -1
+}
+
+const formMaskObj = {
+  startMessage: 'make the form',
+  endMessage: 'thanks for your attention',
+  formMask: [
+    [{field: 'Name'}, {field: 'Surname'}],
+    [{email: 'Email'}, {phone: 'Mobil number'}],
+    [{submit: 'Send'}, {change: 'Change information'}, {exit: 'Cancel proccess'}]
+  ]
+}
+
+var botToken = '6100322163:AAEiEx8mKE7OsDLvah6sNT5DZFfijVAWIF0',
+    appUrl = 'https://script.google.com/macros/s/AKfycbzFWaa2Vf1BxFtutU1Dpu_qq1sgu310p5_M1DhFZgsoNd2GwfV95D3hA7fPsHEt_Xe5/exec',
+    botUrl = 'https://api.telegram.org/bot' + botToken,
+    gSheet = SpreadsheetApp.openById('13kKtg7EldDV8dTRBjKGoBr5nhXfOJLqXZemuzpP0PaA'),
+    gTable = getSheetById(gSheet, 0),
+    dataPage = getSheetById(gSheet, 923624665),
+    tableRangeLimiter = 1e3,
+    chat_form = null,
+    userDataPageRowNumber = null
+    function doPost(e) {
+  try {
+    // const webhookData = debugMessages[1],
+    const webhookData = JSON.parse(e.postData.contents),
+          chatId = webhookData.message.from.id,
+          text = webhookData.message.text
+
+    userDataPageRowNumber = getUserDataPageRowNumber(chatId)
+    if(userDataPageRowNumber === -1) {
+      dataPage.appendRow([chatId, 'FREE'])
+      userDataPageRowNumber = getUserDataPageRowNumber(chatId)
+    }
+    chat_form = getDataCell(userDataPageRowNumber, 3) ? new formRequest().importData(JSON.parse(getDataCell(userDataPageRowNumber, 3))) : null
+    
+    // if(getDataCell(userDataPageRowNumber, 2) === 'FREE') {
+      if(text.match(/^\//g) !== null) {
+        if(typeof commands[text] === 'function') commands[text](webhookData)
+        else sendMessage(chatId, 'Unexisted command')
+      }
+    // }
+    else if(getDataCell(userDataPageRowNumber, 2).match(/^FORM/g)) {
+      chat_form.messageHandler(webhookData)
+    }
+  }
+  catch(err) {
+    Logger = BetterLog.useSpreadsheet("13kKtg7EldDV8dTRBjKGoBr5nhXfOJLqXZemuzpP0PaA");
+    err = (typeof err === 'string') ? new error(err) : err;
+    Logger.log('%s: %s (line %s, file "%s"). Stack: "%s" . While processing %s.', err.name || '',
+    err.message || '', err.lineNumber || '', err.fileName || '', err.stack || '', '');
+  }
+}
+
+const commands = {
+  '/debug_response': data => {
+    sendMessage(data.message.from.id, JSON.stringify(data, 0, 2))
+  },
+  '/test_keyboard': data => {
+    sendMessage(data.message.from.id, 'Keyboard message', {
+      keyboard: [
+        [{text: 'button'}, {text: 'button2'}]
+      ],
+      resize_keyboard: true,
+      // one_time_keyboard: true
+    })
+  },
+  '/test_keyboard_remove': data => {
+    sendMessage(data.message.from.id, 'Keyboard removed', {remove_keyboard: true})
+  },
+  '/business_command': data => {
+    setDataCell(userDataPageRowNumber, 2, 'FORM_EXECUTE')
+    chat_form = new formRequest(formMaskObj)
+    chat_form.startForm(data.message.from.id)
+
+    setDataCell(userDataPageRowNumber, 3, chat_form.exportData())
+  },
+  '/close_business_command': data => {
+    sendMessage(data.message.from.id, 'Command closed', {remove_keyboard: true})
+  },
+}
+
+function f() {
+  const form = new formRequest(formMaskObj)
+  Logger.log(form.getFieldsValues())
+
+  // Logger.log(dataPage.appendRow([1, 0, 0, 0]))
+  // Logger.log(setDataCell(1, 1, null))
+  // form.exportData()
+  // Logger.log(form.maskToKeyboard(form.form))
+  // Logger.log(form.maskToKeyboard(form.form))
+  // new formRequest(mask).objectWhile(itm => Logger.log(itm))
+  // Logger.log(dataPage.getRange(1, 1, tableRangeLimiter).getValues())
+}
