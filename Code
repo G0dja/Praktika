@@ -1,0 +1,17 @@
+const BM25L = BM25_test_bot_library
+
+function setWebhook(){
+  const url = BM25L.botUrl + '/setwebhook?url=' + BM25L.appUrl,
+        res = UrlFetchApp.fetch(url).getContentText()
+
+  BM25L.sendMessage(656091610, 'Script has been run')
+  Logger.log(res);
+}
+
+function doPost(e){
+  BM25L.doPost(e)
+}
+
+function doGet(e){
+  return ContentService.createTextOutput("Method GET not allowed")
+}
